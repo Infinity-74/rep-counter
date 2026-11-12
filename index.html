@@ -57,9 +57,9 @@ a.btn{display:block;text-align:center;text-decoration:none;color:var(--tx);backg
   <div class="row"><a class="btn" id="dl" download="workout.webm">حفظ الفيديو</a><button id="again">تمرين جديد</button></div>
 </section>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" crossorigin="anonymous"></script>
 <script type="module">
-const BASE="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/";
+const MODEL="https://cdn.jsdelivr.net/npm/@vladmandic/human-models@3.0.4/models/movenet-lightning.json";
 const $=id=>document.getElementById(id);
 const v=$('v'),cv=$('cv'),cx=cv.getContext('2d');
 let lm,stream,rec,chunks=[],t0=0,running=false,reps=[],S,A,msgT;
@@ -99,7 +99,7 @@ function step(p,w,h,tms){
   const all=[no,sh,el,wr,hp,kn,an];
   draw([sh,el,wr,hp,kn,an],w,h);
   const key=$('ex').value,cfg=EX[key];
-  if(NEEDS[key].some(i=>all[i].v<.5)){msg('الجسم مش واضح في الكاميرا','');return}
+  if(NEEDS[key].some(i=>all[i].v<.3)){msg('الجسم مش واضح في الكاميرا','');return}
   const lineY=sh.y+(an.y-sh.y)*(hp.x-sh.x)/((an.x-sh.x)||1e-6);
   const c={e:sm('e',ang(sh,el,wr)),b:sm('b',ang(sh,hp,an)),h:sm('h',ang(sh,hp,kn)),k:sm('k',ang(hp,kn,an)),
            dev:hp.y-lineY,chin:no.y<wr.y};
@@ -128,16 +128,26 @@ function draw(pts,w,h){
 
 /* ---------- تشغيل ---------- */
 let last=-1;
+// MoveNet (17 نقطة) -> ترتيب BlazePose اللي الكود بيستخدمه
+const MAP={0:0,11:5,12:6,13:7,14:8,15:9,16:10,23:11,24:12,25:13,26:14,27:15,28:16};
+async function infer(){
+  const w=v.videoWidth,h=v.videoHeight,size=Math.max(w,h);
+  const out=tf.tidy(()=>{
+    let img=tf.browser.fromPixels(v).pad([[0,size-h],[0,size-w],[0,0]]);
+    img=tf.image.resizeBilinear(img,[192,192]).cast('int32').expandDims(0);
+    return lm.predict(img);
+  });
+  const d=await out.data();out.dispose();
+  if(!running)return;
+  if(first){first=false;st('')}
+  const p=[];for(const k in MAP){const o=MAP[k]*3;p[k]={x:d[o+1]*size/w,y:d[o]*size/h,visibility:d[o+2]}}
+  step(p,w,h,performance.now()-t0);
+}
 async function loop(){
   while(running){
-    if(v.currentTime!==last&&v.videoWidth){last=v.currentTime;try{await lm.send({image:v})}catch(e){}}
+    if(v.currentTime!==last&&v.videoWidth){last=v.currentTime;try{await infer()}catch(e){st('خطأ في التحليل: '+(e.message||e))}}
     else await new Promise(r=>requestAnimationFrame(r));
   }
-}
-function onRes(r){
-  if(!running)return;
-  if(r.poseLandmarks)step(r.poseLandmarks,v.videoWidth,v.videoHeight,performance.now()-t0);
-  else{cx.clearRect(0,0,cv.width,cv.height);msg('مفيش جسم ظاهر','')}
 }
 const st=t=>$('st').textContent=t;
 addEventListener('unhandledrejection',e=>st('خطأ: '+(e.reason&&e.reason.message||e.reason)));
@@ -162,14 +172,15 @@ $('go').onclick=async()=>{
     v.srcObject=stream;v.play().catch(()=>{});
     await new Promise(r=>{if(v.readyState>=2)r();else v.onloadeddata=r;setTimeout(r,5000)});
     if(!lm){
-      const t1=performance.now();
-      tick=setInterval(()=>st(`2/3 تحميل الموديل... ${((performance.now()-t1)/1000)|0} ثانية (أول مرة ممكن تاخد 1-2 دقيقة، يفضل واي فاي)`),500);
-      const ps=new Pose({locateFile:f=>BASE+f});
-      ps.setOptions({modelComplexity:0,smoothLandmarks:true,minDetectionConfidence:.5,minTrackingConfidence:.5});
-      ps.onResults(r=>{if(first){first=false;st('')}onRes(r)});
-      const to=new Promise((_,j)=>setTimeout(()=>j(new Error('التحميل وقف أكتر من 3 دقايق. جرّب واي فاي، أو اقفل التابات التانية، أو جرّب كروم تاني')),180000));
-      await Promise.race([ps.initialize(),to]);
-      lm=ps;clearInterval(tick);
+      st('2/3 تحميل مكتبة الذكاء الاصطناعي...');
+      if(!window.tf)throw new Error('مكتبة الذكاء الاصطناعي ما اتحمّلتش. اتأكد من النت وجرّب تاني');
+      try{await tf.setBackend('webgl')}catch(e){}
+      if(tf.getBackend()!=='webgl')await tf.setBackend('cpu');
+      await tf.ready();
+      st('2/3 تحميل الموديل... 0%');
+      lm=await tf.loadGraphModel(MODEL,{onProgress:q=>st('2/3 تحميل الموديل... '+Math.round(q*100)+'%')});
+      st('2/3 تجهيز الموديل...');
+      const z=lm.predict(tf.zeros([1,192,192,3],'int32'));await z.data();z.dispose();
     }
     st('3/3 تشغيل التحليل... (أول فريم ممكن ياخد ثواني)');first=true;
     reps=[];A={};S={ph:'wait'};chunks=[];
