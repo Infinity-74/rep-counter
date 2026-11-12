@@ -33,7 +33,7 @@ a.btn{display:block;text-align:center;text-decoration:none;color:var(--tx);backg
 </style>
 </head>
 <body>
-<h1>عدّاد التمرين <small style="color:#8fa1b0;font-weight:400">v6</small></h1>
+<h1>عدّاد التمرين <small style="color:#8fa1b0;font-weight:400">v8</small></h1>
 
 <section id="live">
   <div class="row">
@@ -71,24 +71,26 @@ const sm=(k,x)=>A[k]=A[k]==null?x:A[k]*.6+x*.4;
 /* ---------- قواعد كل تمرين ----------
    sig: الزاوية اللي بتحدد النزول/الطلوع | hi: وضع الفرد/الاستلقاء | lo: بداية العدة
    track: بيتسجل أثناء العدة | check: بيرجّع أسباب الغلط (فاضي = عدة صح) */
+const HEAD_MAX=40; // أقصى انحناء مسموح للراس لتحت (بالدرجات) - غيّره لو بيرفض كتير أو بيقبل كتير
 const EX={
- pushup:{sig:'e',hi:155,lo:140,
-  track:(m,c)=>{m.e=Math.min(m.e??999,c.e); if(c.b<(m.b??999)){m.b=c.b;m.dev=c.dev}},
+ pushup:{sig:'e',hi:155,lo:140,ext:'افرد دراعك أكتر لفوق',
+  track:(m,c)=>{m.e=Math.min(m.e??999,c.e);m.hd=Math.max(m.hd??0,c.hd); if(c.b<(m.b??999)){m.b=c.b;m.dev=c.dev}},
   check:m=>{const r=[];
-   if(m.e>100)r.push('ما نزلتش كفاية (الكوع لازم يوصل لحوالي 90°)');
-   if(m.b<160)r.push(m.dev>0?'الورك واقع لتحت':'الورك مرفوع لفوق');return r}},
- situp:{sig:'h',hi:125,lo:105,
+   if(m.e>100)r.push('انزل أكتر (الكوع لازم يوصل لحوالي 90°)');
+   if(m.b<160)r.push(m.dev>0?'الورك واقع لتحت':'الورك مرفوع لفوق');
+   if(m.hd>HEAD_MAX)r.push('الراس واطية (بص قدامك وارفع راسك على استقامة الضهر)');return r}},
+ situp:{sig:'h',hi:125,lo:105,ext:'ارجع لآخر (استلقي بضهرك كله)',
   track:(m,c)=>{m.h=Math.min(m.h??999,c.h);m.k=Math.max(m.k??0,c.k)},
   check:m=>{const r=[];
    if(m.h>80)r.push('الطلعة ناقصة (اطلع بصدرك أكتر ناحية ركبك)');
    if(m.k>130)r.push('ثني ركبك');return r}},
- pullup:{sig:'e',hi:155,lo:140,
+ pullup:{sig:'e',hi:155,lo:140,ext:'افرد دراعك لآخر قبل ما تعيد',
   track:(m,c)=>{m.e=Math.min(m.e??999,c.e);if(c.chin)m.chin=true},
   check:m=>{const r=[];
    if(!m.chin)r.push('ما وصلتش بدقنك لفوق العقلة');return r}}
 };
 // النقط اللازم تكون واضحة: 0 مناخير، ثم 1 كتف 2 كوع 3 رسغ 4 ورك 5 ركبة 6 كاحل
-const NEEDS={pushup:[1,2,3,4,6],situp:[1,4,5,6],pullup:[0,2,3]};
+const NEEDS={pushup:[0,1,2,3,4,6],situp:[1,4,5,6],pullup:[0,2,3]};
 
 function step(p,w,h,tms){
   const L=[11,13,15,23,25,27],R=[12,14,16,24,26,28];
@@ -103,21 +105,29 @@ function step(p,w,h,tms){
   const lineY=sh.y+(an.y-sh.y)*(hp.x-sh.x)/((an.x-sh.x)||1e-6);
   const c={e:sm('e',ang(sh,el,wr)),b:sm('b',ang(sh,hp,an)),h:sm('h',ang(sh,hp,kn)),k:sm('k',ang(hp,kn,an)),
            dev:hp.y-lineY,chin:no.y<wr.y};
-  $('dbg').textContent=`كوع ${c.e|0}° | جسم ${c.b|0}° | ورك ${c.h|0}° | ركبة ${c.k|0}°`;
+  const spineY=hp.y+(sh.y-hp.y)*(no.x-hp.x)/((sh.x-hp.x)||1e-6);
+  c.hd=sm('d',no.y>spineY?180-ang(hp,sh,no):0); // انحناء الراس لتحت عن امتداد الضهر
+  $('dbg').textContent=`كوع ${c.e|0}° | جسم ${c.b|0}° | ورك ${c.h|0}° | ركبة ${c.k|0}° | راس ${c.hd|0}°`;
   const val=c[cfg.sig];
   if(S.ph==='wait'){if(val>cfg.hi){S.ph='ready';msg('جاهز، ابدأ','')}return}
-  if(S.ph==='ready'){if(val<cfg.lo){S.ph='in';S.s=tms;S.m={};cfg.track(S.m,c)}return}
+  if(S.ph==='ready'){if(val<cfg.lo){S.ph='in';S.s=tms;S.m={};S.lo=val;S.pk=null;cfg.track(S.m,c)}return}
+  S.lo=Math.min(S.lo,val);
+  if(val>S.lo+(cfg.hi-S.lo)*.6)S.pk=Math.max(S.pk??0,val); // طلع كتير بس لسه ما فردش
   cfg.track(S.m,c);
-  if(val>cfg.hi){ // العدة خلصت
-    S.ph='ready';
-    if(tms-S.s<500)return; // اهتزاز مش عدة
-    const why=cfg.check(S.m);
-    reps.push({n:reps.length+1,ok:!why.length,why:why.join('، '),s:S.s,e:tms});
-    const g=reps.filter(r=>r.ok).length;
-    $('okc').textContent='صح '+g;$('badc').textContent='غلط '+(reps.length-g);
-    if(why.length){msg('✕ '+why.join('، '),'bad');navigator.vibrate?.(200)}
-    else msg('✓ عدة صح رقم '+g,'good');
+  if(val>cfg.hi){S.ph='ready';finish(cfg,tms,null);return} // العدة خلصت بفرد كامل
+  if(S.pk!=null&&val<S.pk-20){ // رجع ينزل قبل ما يفرد لآخر
+    finish(cfg,tms,cfg.ext);
+    S.s=tms;S.m={};S.lo=val;S.pk=null;cfg.track(S.m,c);
   }
+}
+function finish(cfg,tms,extra){
+  if(tms-S.s<500)return; // اهتزاز مش عدة
+  const why=cfg.check(S.m);if(extra)why.push(extra);
+  reps.push({n:reps.length+1,ok:!why.length,why:why.join('، '),s:S.s,e:tms});
+  const g=reps.filter(r=>r.ok).length;
+  $('okc').textContent='صح '+g;$('badc').textContent='غلط '+(reps.length-g);
+  if(why.length){msg('✕ '+why.join('، '),'bad');navigator.vibrate?.(200)}
+  else msg('✓ عدة صح رقم '+g,'good');
 }
 function msg(t,c){const m=$('msg');m.textContent=t;m.className=c;clearTimeout(msgT);if(c)msgT=setTimeout(()=>{m.textContent='';m.className=''},2500)}
 function draw(pts,w,h){
