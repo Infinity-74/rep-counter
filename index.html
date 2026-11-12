@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#10161c">
+<title>عدّاد التمرين</title>
+<style>
+:root{--bg:#10161c;--sf:#1a232c;--tx:#e8eef3;--mt:#8fa1b0;--ok:#4cc38a;--bad:#ff6b5e;--ac:#5ab0ff}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding:env(safe-area-inset-top,0) 12px env(safe-area-inset-bottom,0);max-width:720px;margin:0 auto}
+h1{font-size:1.25rem;margin:14px 0 10px}
+.row{display:flex;gap:8px;margin-bottom:10px}
+select,button{font:inherit;color:var(--tx);background:var(--sf);border:1px solid #2c3a46;border-radius:10px;padding:12px;flex:1}
+button.main{background:var(--ac);color:#06121d;border:0;font-weight:700}
+button.stop{background:var(--bad);color:#2a0a07;border:0;font-weight:700}
+button:disabled{opacity:.5}
+.stage{position:relative;background:#000;border-radius:12px;overflow:hidden;min-height:180px}
+video,canvas{display:block;width:100%}
+canvas{position:absolute;inset:0;height:100%}
+.hud{position:absolute;top:8px;inset-inline:8px;display:flex;justify-content:space-between;pointer-events:none;font-weight:700;font-size:1.1rem}
+.hud span{background:#000a;padding:4px 10px;border-radius:8px}
+.good{color:var(--ok)}.bad{color:var(--bad)}
+#msg{position:absolute;bottom:0;inset-inline:0;text-align:center;font-size:1.25rem;font-weight:700;padding:12px;background:#000b;min-height:52px}
+#st,#dbg{color:var(--mt);font-size:.85rem;margin:8px 2px;min-height:1.2em}
+#cap{min-height:56px;padding:12px;margin:10px 0;border-radius:10px;background:var(--sf);font-weight:700;font-size:1.1rem;text-align:center}
+#list{list-style:none;margin:0 0 12px;padding:0}
+#list li{background:var(--sf);margin-bottom:6px;padding:12px;border-radius:10px;display:flex;justify-content:space-between;gap:8px}
+#sum{font-size:1.1rem;margin:6px 2px 10px}
+a.btn{display:block;text-align:center;text-decoration:none;color:var(--tx);background:var(--sf);border:1px solid #2c3a46;border-radius:10px;padding:12px;flex:1}
+.hide{display:none}
+</style>
+</head>
+<body>
+<h1>عدّاد التمرين</h1>
+
+<section id="live">
+  <div class="row">
+    <select id="ex"><option value="pushup">ضغط</option><option value="situp">بطن</option><option value="pullup">عقلة</option></select>
+    <select id="cam"><option value="environment">الكاميرا الخلفية</option><option value="user">الكاميرا الأمامية</option></select>
+  </div>
+  <div class="row"><button id="go" class="main">ابدأ التمرين</button></div>
+  <div class="stage">
+    <video id="v" playsinline muted></video><canvas id="cv"></canvas>
+    <div class="hud"><span class="good" id="okc">صح 0</span><span class="bad" id="badc">غلط 0</span></div>
+    <div id="msg">حط الموبايل جنبك بحيث يظهر جسمك كله</div>
+  </div>
+  <div id="st"></div><div id="dbg"></div>
+</section>
+
+<section id="review" class="hide">
+  <div id="sum"></div>
+  <video id="rv" controls playsinline style="border-radius:12px;background:#000"></video>
+  <div id="cap"></div>
+  <ul id="list"></ul>
+  <div class="row"><a class="btn" id="dl" download="workout.webm">حفظ الفيديو</a><button id="again">تمرين جديد</button></div>
+</section>
+
+<script type="module">
+import {PoseLandmarker,FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
+const WASM="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL="https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const $=id=>document.getElementById(id);
+const v=$('v'),cv=$('cv'),cx=cv.getContext('2d');
+let lm,stream,rec,chunks=[],t0=0,running=false,reps=[],S,A,msgT;
+
+/* ---------- حسابات ---------- */
+const ang=(a,b,c)=>{let d=Math.abs((Math.atan2(c.y-b.y,c.x-b.x)-Math.atan2(a.y-b.y,a.x-b.x))*180/Math.PI);return d>180?360-d:d};
+const sm=(k,x)=>A[k]=A[k]==null?x:A[k]*.6+x*.4;
+
+/* ---------- قواعد كل تمرين ----------
+   sig: الزاوية اللي بتحدد النزول/الطلوع | hi: وضع الفرد/الاستلقاء | lo: بداية العدة
+   track: بيتسجل أثناء العدة | check: بيرجّع أسباب الغلط (فاضي = عدة صح) */
+const EX={
+ pushup:{sig:'e',hi:155,lo:140,
+  track:(m,c)=>{m.e=Math.min(m.e??999,c.e); if(c.b<(m.b??999)){m.b=c.b;m.dev=c.dev}},
+  check:m=>{const r=[];
+   if(m.e>100)r.push('ما نزلتش كفاية (الكوع لازم يوصل لحوالي 90°)');
+   if(m.b<160)r.push(m.dev>0?'الورك واقع لتحت':'الورك مرفوع لفوق');return r}},
+ situp:{sig:'h',hi:125,lo:105,
+  track:(m,c)=>{m.h=Math.min(m.h??999,c.h);m.k=Math.max(m.k??0,c.k)},
+  check:m=>{const r=[];
+   if(m.h>80)r.push('الطلعة ناقصة (اطلع بصدرك أكتر ناحية ركبك)');
+   if(m.k>130)r.push('ثني ركبك');return r}},
+ pullup:{sig:'e',hi:155,lo:140,
+  track:(m,c)=>{m.e=Math.min(m.e??999,c.e);if(c.chin)m.chin=true},
+  check:m=>{const r=[];
+   if(!m.chin)r.push('ما وصلتش بدقنك لفوق العقلة');return r}}
+};
+// النقط اللازم تكون واضحة: 0 مناخير، ثم 1 كتف 2 كوع 3 رسغ 4 ورك 5 ركبة 6 كاحل
+const NEEDS={pushup:[1,2,3,4,6],situp:[1,4,5,6],pullup:[0,2,3]};
+
+function step(p,w,h,tms){
+  const L=[11,13,15,23,25,27],R=[12,14,16,24,26,28];
+  const vis=a=>a.reduce((s,i)=>s+(p[i].visibility??0),0);
+  const J=vis(L)>=vis(R)?L:R;
+  const P=i=>({x:p[i].x*w,y:p[i].y*h,v:p[i].visibility??0});
+  const no=P(0),sh=P(J[0]),el=P(J[1]),wr=P(J[2]),hp=P(J[3]),kn=P(J[4]),an=P(J[5]);
+  const all=[no,sh,el,wr,hp,kn,an];
+  draw([sh,el,wr,hp,kn,an],w,h);
+  const key=$('ex').value,cfg=EX[key];
+  if(NEEDS[key].some(i=>all[i].v<.5)){msg('الجسم مش واضح في الكاميرا','');return}
+  const lineY=sh.y+(an.y-sh.y)*(hp.x-sh.x)/((an.x-sh.x)||1e-6);
+  const c={e:sm('e',ang(sh,el,wr)),b:sm('b',ang(sh,hp,an)),h:sm('h',ang(sh,hp,kn)),k:sm('k',ang(hp,kn,an)),
+           dev:hp.y-lineY,chin:no.y<wr.y};
+  $('dbg').textContent=`كوع ${c.e|0}° | جسم ${c.b|0}° | ورك ${c.h|0}° | ركبة ${c.k|0}°`;
+  const val=c[cfg.sig];
+  if(S.ph==='wait'){if(val>cfg.hi){S.ph='ready';msg('جاهز، ابدأ','')}return}
+  if(S.ph==='ready'){if(val<cfg.lo){S.ph='in';S.s=tms;S.m={};cfg.track(S.m,c)}return}
+  cfg.track(S.m,c);
+  if(val>cfg.hi){ // العدة خلصت
+    S.ph='ready';
+    if(tms-S.s<500)return; // اهتزاز مش عدة
+    const why=cfg.check(S.m);
+    reps.push({n:reps.length+1,ok:!why.length,why:why.join('، '),s:S.s,e:tms});
+    const g=reps.filter(r=>r.ok).length;
+    $('okc').textContent='صح '+g;$('badc').textContent='غلط '+(reps.length-g);
+    if(why.length){msg('✕ '+why.join('، '),'bad');navigator.vibrate?.(200)}
+    else msg('✓ عدة صح رقم '+g,'good');
+  }
+}
+function msg(t,c){const m=$('msg');m.textContent=t;m.className=c;clearTimeout(msgT);if(c)msgT=setTimeout(()=>{m.textContent='';m.className=''},2500)}
+function draw(pts,w,h){
+  cv.width=w;cv.height=h;cx.clearRect(0,0,w,h);cx.strokeStyle='#5ab0ff';cx.fillStyle='#fff';cx.lineWidth=4;
+  cx.beginPath();pts.forEach((q,i)=>i?cx.lineTo(q.x,q.y):cx.moveTo(q.x,q.y));cx.stroke();
+  pts.forEach(q=>{cx.beginPath();cx.arc(q.x,q.y,6,0,7);cx.fill()});
+}
+
+/* ---------- تشغيل ---------- */
+let last=-1;
+function loop(){
+  if(!running)return;
+  if(v.currentTime!==last&&v.videoWidth){
+    last=v.currentTime;
+    const r=lm.detectForVideo(v,performance.now());
+    if(r.landmarks[0])step(r.landmarks[0],v.videoWidth,v.videoHeight,performance.now()-t0);
+    else{cx.clearRect(0,0,cv.width,cv.height);msg('مفيش جسم ظاهر','')}
+  }
+  requestAnimationFrame(loop);
+}
+$('go').onclick=async()=>{
+  if(running){stop();return}
+  $('go').disabled=true;$('st').textContent='جاري تحميل الموديل (أول مرة بياخد وقت)...';
+  try{
+    lm=lm||await PoseLandmarker.createFromOptions(await FilesetResolver.forVisionTasks(WASM),
+      {baseOptions:{modelAssetPath:MODEL,delegate:'GPU'},runningMode:'VIDEO',numPoses:1});
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('cam').value,width:{ideal:640},height:{ideal:480}},audio:false});
+    v.srcObject=stream;await v.play();
+    reps=[];A={};S={ph:'wait'};chunks=[];
+    $('okc').textContent='صح 0';$('badc').textContent='غلط 0';
+    rec=new MediaRecorder(stream);
+    rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+    rec.onstop=showReview;
+    rec.start();t0=performance.now();running=true;
+    $('go').textContent='إنهاء التمرين';$('go').className='stop';$('st').textContent='';
+    msg('افرد جسمك عشان نبدأ','');loop();
+  }catch(err){$('st').textContent='حصل خطأ: '+(err.message||err)}
+  $('go').disabled=false;
+};
+function stop(){running=false;rec.stop();stream.getTracks().forEach(t=>t.stop())}
+
+/* ---------- المراجعة ---------- */
+function showReview(){
+  const blob=new Blob(chunks,{type:'video/webm'}),url=URL.createObjectURL(blob);
+  $('live').classList.add('hide');$('review').classList.remove('hide');
+  const rv=$('rv');rv.src=url;$('dl').href=url;
+  const ok=reps.filter(r=>r.ok).length;
+  $('sum').textContent=`صح ${ok} | غلط ${reps.length-ok}`;
+  $('cap').textContent='';
+  $('list').innerHTML='';
+  if(!reps.length)$('list').innerHTML='<li>مفيش عدّات اتسجلت</li>';
+  reps.forEach(r=>{
+    const li=document.createElement('li');
+    li.innerHTML=`<span>${r.n}. ${r.ok?'✓ عدة صح':'✕ '+r.why}</span><span>${(r.s/1000).toFixed(1)}ث</span>`;
+    li.style.color=r.ok?'var(--ok)':'var(--bad)';
+    li.onclick=()=>{rv.currentTime=Math.max(0,r.s/1000-.5);rv.play()};
+    $('list').appendChild(li);
+  });
+  rv.ontimeupdate=()=>{
+    const t=rv.currentTime*1000,r=reps.find(r=>t>=r.s-300&&t<=r.e+1500);
+    $('cap').textContent=r?(r.ok?`✓ عدة ${r.n}: صح`:`✕ عدة ${r.n} ما اتحسبتش: ${r.why}`):'';
+    $('cap').style.color=r?(r.ok?'var(--ok)':'var(--bad)'):'';
+  };
+}
+$('again').onclick=()=>{
+  $('review').classList.add('hide');$('live').classList.remove('hide');
+  $('go').textContent='ابدأ التمرين';$('go').className='main';cx.clearRect(0,0,cv.width,cv.height);
+  msg('حط الموبايل جنبك بحيث يظهر جسمك كله','');
+};
+</script>
+</body>
+</html>
