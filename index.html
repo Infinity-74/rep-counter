@@ -33,7 +33,7 @@ a.btn{display:block;text-align:center;text-decoration:none;color:var(--tx);backg
 </style>
 </head>
 <body>
-<h1>عدّاد التمرين</h1>
+<h1>عدّاد التمرين <small style="color:#8fa1b0;font-weight:400">v6</small></h1>
 
 <section id="live">
   <div class="row">
@@ -59,7 +59,7 @@ a.btn{display:block;text-align:center;text-decoration:none;color:var(--tx);backg
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js" crossorigin="anonymous"></script>
 <script type="module">
-const MODEL="https://cdn.jsdelivr.net/npm/@vladmandic/human-models@3.0.4/models/movenet-lightning.json";
+const MODEL=new URL('movenet-lightning.json',location.href).href;
 const $=id=>document.getElementById(id);
 const v=$('v'),cv=$('cv'),cx=cv.getContext('2d');
 let lm,stream,rec,chunks=[],t0=0,running=false,reps=[],S,A,msgT;
