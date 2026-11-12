@@ -142,14 +142,25 @@ function onRes(r){
 const st=t=>$('st').textContent=t;
 addEventListener('unhandledrejection',e=>st('خطأ: '+(e.reason&&e.reason.message||e.reason)));
 addEventListener('error',e=>st('خطأ: '+e.message));
+const getCam=async()=>{
+  const tries=[{video:{facingMode:{ideal:$('cam').value}},audio:false},{video:true,audio:false}];let last;
+  for(const c of tries){
+    try{return await Promise.race([navigator.mediaDevices.getUserMedia(c),
+      new Promise((_,j)=>setTimeout(()=>j(new Error('الكاميرا ما ردتش. اقفل أي تبويب أو تطبيق تاني فاتح الكاميرا وجرّب تاني')),12000))])}
+    catch(e){last=e}
+  }
+  throw last;
+};
 let first=true;
 $('go').onclick=async()=>{
   if(running){stop();return}
   $('go').disabled=true;let tick;
   try{
-    st('1/3 فتح الكاميرا...');
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:$('cam').value,width:{ideal:640},height:{ideal:480}},audio:false});
-    v.srcObject=stream;await v.play();
+    st('1/3 طلب الكاميرا...');
+    stream=await getCam();
+    st('1/3 تشغيل المعاينة...');
+    v.srcObject=stream;v.play().catch(()=>{});
+    await new Promise(r=>{if(v.readyState>=2)r();else v.onloadeddata=r;setTimeout(r,5000)});
     if(!lm){
       const t1=performance.now();
       tick=setInterval(()=>st(`2/3 تحميل الموديل... ${((performance.now()-t1)/1000)|0} ثانية (أول مرة ممكن تاخد 1-2 دقيقة، يفضل واي فاي)`),500);
@@ -176,7 +187,7 @@ function stop(){running=false;rec.stop();stream.getTracks().forEach(t=>t.stop())
 
 /* ---------- المراجعة ---------- */
 function showReview(){
-  const blob=new Blob(chunks,{type:'video/webm'}),url=URL.createObjectURL(blob);
+  const mt=(rec.mimeType||'video/webm').split(';')[0],blob=new Blob(chunks,{type:mt}),url=URL.createObjectURL(blob);$('dl').download='workout.'+(mt.includes('mp4')?'mp4':'webm');
   $('live').classList.add('hide');$('review').classList.remove('hide');
   const rv=$('rv');rv.src=url;$('dl').href=url;
   const ok=reps.filter(r=>r.ok).length;
